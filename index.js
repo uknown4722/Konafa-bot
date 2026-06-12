@@ -9,11 +9,11 @@ app.use(bodyParser.urlencoded({ extended: false }));
 const SHEET_WEBHOOK_URL =
   "https://script.google.com/macros/s/AKfycbxV8m__V7sGVIuCOKqt8ARatwTa8iLc2gfUfNfCT7tuXs8spxMJAkof5ZVks9E5bmM5/exec";
 
-async function saveOrder(phone, orderText, total) {
+async function saveOrder(phone, orderText) {
   await fetch(SHEET_WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone, order: `${orderText} | الإجمالي: ${total} ج.م` }),
+    body: JSON.stringify({ phone, order: orderText }),
   });
 }
 
@@ -25,16 +25,25 @@ const PRICES = {
   "بسبوسة-كبير": 80,
 };
 
+const ITEM_LABELS = {
+  "كنافة-صغير": "كنافة صغير",
+  "كنافة-كبير": "كنافة كبير",
+  "بسبوسة-صغير": "بسبوسة صغير",
+  "بسبوسة-كبير": "بسبوسة كبير",
+};
+
 const MENU_MESSAGE =
   "📋 المنيو:\n" +
   "🟡 كنافة صغير: 50 ج.م\n" +
   "🟡 كنافة كبير: 80 ج.م\n" +
   "🟤 بسبوسة صغير: 50 ج.م\n" +
   "🟤 بسبوسة كبير: 80 ج.م\n\n" +
+  "اكتب طلبك (مثال: 3 كنافة كبير و 2 بسبوسة صغير).\n" +
   "لو حابب تتكلم مع موظف في أي وقت، اكتب \"موظف\".";
 
-const WELCOME_MESSAGE =
-  "أهلاً بيك في كنافة وبسبوسة 🍯🧁\n\n" + MENU_MESSAGE;
+const GREETING_REPLY = "وعليكم السلام ورحمة الله وبركاته 🌿";
+
+const WELCOME_MESSAGE = "أهلاً بيك في كنافة وبسبوسة 🍯🧁\n\n" + MENU_MESSAGE;
 
 const HUMAN_REQUEST_MESSAGE =
   "تمام، تم تحويلك لأحد فريقنا وهيتواصل معاك في أقرب وقت 🙏\n" +
@@ -44,28 +53,22 @@ const HUMAN_ACTIVE_MESSAGE =
   "طلبك لسه عند فريقنا وهيتم الرد عليك قريب 🙏\n" +
   "(اكتب \"رجوع\" لو حابب تكمل مع البوت).";
 
-const BACK_TO_BOT_MESSAGE = "تمام، رجعت تاني للبوت 👍\n" + MENU_MESSAGE;
+const BACK_TO_BOT_MESSAGE = "تمام، رجعت تاني للبوت 👍\n\n" + MENU_MESSAGE;
 
 const THANKS_MESSAGE = "العفو، تحت أمرك في أي وقت 🌟";
 
-const FINAL_THANK_YOU =
-  "تم تأكيد طلبك بنجاح ✅ وهيتم التواصل معاك لتأكيد التوصيل قريب.\n" +
-  "شكرًا لتواصلك معنا، أتمنى لك كنافة لذيذة 🍯😋";
+const ASK_ADDRESS_MESSAGE = "تمام يا فندم ✅\nممكن العنوان؟";
 
-const CANCEL_MESSAGE =
-  "تم إلغاء الطلب لعدم التأكيد في الوقت المحدد ⏱️\n" +
-  "لو حابب تطلب تاني، اكتب طلبك من جديد.";
+const FINAL_MESSAGE =
+  "تمام يا فندم، تم حجز الطلب ✅\n" +
+  "وفي خلال 40 لـ 60 دقيقة هيكون الطلب عند حضرتك.\n" +
+  "نورتنا يا فندم 🌟";
 
-const NOT_UNDERSTOOD_MESSAGE =
-  "معلش، مش قادر أفهم طلبك 🙏\n\n" + MENU_MESSAGE;
-
-const CONFIRM_KEYWORDS = ["تاكيد", "تأكيد", "اوكي", "أوكي", "تمام", "اكد", "أكد", "yes", "ok", "confirm", "موافق"];
+const CONFIRM_KEYWORDS = ["تاكيد", "تأكيد", "اكد", "أكد", "ناكد", "نأكد", "اوكي", "أوكي", "تمام", "yes", "ok", "confirm", "موافق"];
 const HUMAN_KEYWORDS = ["موظف", "ممثل", "انسان", "إنسان", "حد يرد", "اتكلم مع حد", "خدمة عملاء", "human", "agent"];
 const BACK_KEYWORDS = ["رجوع", "back", "بوت", "رجعني"];
 const THANKS_KEYWORDS = ["شكرا", "شكراً", "متشكر", "تسلم", "ثانكس", "thanks", "thank you"];
 const GREETING_KEYWORDS = ["سلام", "السلام عليكم", "اهلا", "أهلا", "هاي", "hi", "hello"];
-
-const CONFIRMATION_TIMEOUT_MS = 60 * 1000; // دقيقة واحدة
 
 function containsAny(text, list) {
   const lower = text.toLowerCase();
@@ -79,54 +82,77 @@ function normalizeDigits(text) {
 }
 
 // ===== تحليل الطلب من النص =====
-function parseOrder(rawText) {
+// يدعم: "3 كنافة كبير"، "كنافة كبير 3"، "كبير 3" (يكمل على آخر منتج مذكور)
+function parseOrderItems(rawText) {
   const text = normalizeDigits(rawText);
-  let remaining = text;
+  const regex = /(\d+)?\s*(كناف[ةه]|بسبوس[ةه])?\s*(صغير[ةه]?|كبير[ةه]?)\s*(\d+)?/g;
+
   const items = [];
-  let total = 0;
+  let lastItemName = "كنافة"; // افتراضي
+  let match;
 
-  const itemDefs = [
-    { key: "كنافة-كبير", regex: /(\d+)?\s*كناف[ةه]\s*كبير[ةه]?\s*(\d+)?/g, label: "كنافة كبير" },
-    { key: "كنافة-صغير", regex: /(\d+)?\s*كناف[ةه]\s*صغير[ةه]?\s*(\d+)?/g, label: "كنافة صغير" },
-    { key: "بسبوسة-كبير", regex: /(\d+)?\s*بسبوس[ةه]\s*كبير[ةه]?\s*(\d+)?/g, label: "بسبوسة كبير" },
-    { key: "بسبوسة-صغير", regex: /(\d+)?\s*بسبوس[ةه]\s*صغير[ةه]?\s*(\d+)?/g, label: "بسبوسة صغير" },
-  ];
+  while ((match = regex.exec(text)) !== null) {
+    const qtyBefore = match[1];
+    const itemNameRaw = match[2];
+    const sizeRaw = match[3];
+    const qtyAfter = match[4];
 
-  for (const def of itemDefs) {
-    let match;
-    while ((match = def.regex.exec(text)) !== null) {
-      const qty = parseInt(match[1] || match[2] || "1", 10);
-      const price = PRICES[def.key];
-      items.push({ label: def.label, qty, price, lineTotal: qty * price });
-      total += qty * price;
-      remaining = remaining.replace(match[0], " ");
+    if (!sizeRaw) continue;
+
+    const qty = parseInt(qtyBefore || qtyAfter || "1", 10);
+    const size = sizeRaw.startsWith("صغير") ? "صغير" : "كبير";
+
+    let itemName;
+    if (itemNameRaw) {
+      itemName = itemNameRaw.startsWith("كناف") ? "كنافة" : "بسبوسة";
+      lastItemName = itemName;
+    } else {
+      itemName = lastItemName;
     }
+
+    const key = `${itemName}-${size}`;
+    const price = PRICES[key];
+    if (!price) continue;
+
+    items.push({ key, qty, price, lineTotal: qty * price });
   }
 
-  // الباقي من النص يعتبر العنوان (بعد تنظيفه من رموز زيادة)
-  let address = remaining
-    .replace(/[+\-،,]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return { items, total, address };
+  return items;
 }
 
-function buildOrderSummary(items, total, address) {
-  let summary = "🧾 ملخص الطلب:\n";
-  for (const item of items) {
-    summary += `- ${item.label} × ${item.qty} = ${item.lineTotal} ج.م\n`;
+function mergeItems(existingItems, newItems) {
+  const merged = [...existingItems];
+  for (const newItem of newItems) {
+    const found = merged.find((i) => i.key === newItem.key);
+    if (found) {
+      found.qty += newItem.qty;
+      found.lineTotal += newItem.lineTotal;
+    } else {
+      merged.push({ ...newItem });
+    }
   }
-  summary += `\n📍 العنوان: ${address || "غير محدد"}\n`;
-  summary += `💰 الإجمالي: ${total} ج.م\n\n`;
-  summary += 'لتأكيد الطلب اكتب "تأكيد" خلال دقيقة، أو هيتم إلغاء الطلب تلقائيًا.';
-  return summary;
+  return merged;
+}
+
+function calcTotal(items) {
+  return items.reduce((sum, i) => sum + i.lineTotal, 0);
+}
+
+function buildItemsSummary(items) {
+  return items
+    .map((i) => `- ${ITEM_LABELS[i.key]} × ${i.qty} = ${i.lineTotal} ج.م`)
+    .join("\n");
+}
+
+function buildOrderLineForSheet(items, address) {
+  const itemsText = items.map((i) => `${ITEM_LABELS[i.key]} x${i.qty}`).join(", ");
+  return `${itemsText} | الإجمالي: ${calcTotal(items)} ج.م | العنوان: ${address}`;
 }
 
 // ===== حالة كل عميل =====
-// state: "awaiting_order" | "awaiting_confirmation" | "done" | "human"
+// state: "new" | "ordering" | "awaiting_address" | "done" | "human"
 const userState = {};
-const pendingOrders = {}; // { phone: { orderText, total, address, timestamp } }
+const pendingOrders = {}; // { phone: { items: [] } }
 
 // ===== Webhook بتاع Twilio =====
 app.post("/whatsapp", async (req, res) => {
@@ -135,19 +161,6 @@ app.post("/whatsapp", async (req, res) => {
 
   let reply = "";
   const currentState = userState[from];
-
-  // 0) التحقق من تايم آوت التأكيد
-  if (currentState === "awaiting_confirmation" && pendingOrders[from]) {
-    const elapsed = Date.now() - pendingOrders[from].timestamp;
-    if (elapsed > CONFIRMATION_TIMEOUT_MS) {
-      delete pendingOrders[from];
-      userState[from] = "awaiting_order";
-      // نكمل معالجة الرسالة الجديدة بشكل عادي بعد الإلغاء
-      reply = CANCEL_MESSAGE + "\n\n" + MENU_MESSAGE;
-      res.set("Content-Type", "text/xml");
-      return res.send(`<Response><Message>${reply}</Message></Response>`);
-    }
-  }
 
   // 1) طلب موظف - override في أي وقت
   if (containsAny(incomingMsg, HUMAN_KEYWORDS)) {
@@ -158,7 +171,7 @@ app.post("/whatsapp", async (req, res) => {
   // 2) وضع human
   else if (currentState === "human") {
     if (containsAny(incomingMsg, BACK_KEYWORDS)) {
-      userState[from] = "awaiting_order";
+      userState[from] = "new";
       reply = BACK_TO_BOT_MESSAGE;
     } else {
       reply = HUMAN_ACTIVE_MESSAGE;
@@ -168,41 +181,76 @@ app.post("/whatsapp", async (req, res) => {
   else if (containsAny(incomingMsg, THANKS_KEYWORDS)) {
     reply = THANKS_MESSAGE;
   }
-  // 4) في انتظار التأكيد
-  else if (currentState === "awaiting_confirmation") {
-    if (containsAny(incomingMsg, CONFIRM_KEYWORDS)) {
-      const order = pendingOrders[from];
-      try {
-        const orderLine = order.items
-          .map((i) => `${i.label} x${i.qty}`)
-          .join(", ") + ` | العنوان: ${order.address}`;
-        await saveOrder(from, orderLine, order.total);
-        reply = FINAL_THANK_YOU;
-        userState[from] = "done";
-        delete pendingOrders[from];
-      } catch (err) {
-        console.error(err);
-        reply = "حصل خطأ في تسجيل الأوردر، من فضلك حاول تاني بعد شوية.";
-      }
+  // 4) أول رسالة أو ترحيب
+  else if (!currentState || currentState === "new") {
+    userState[from] = "ordering";
+    pendingOrders[from] = { items: [] };
+    if (containsAny(incomingMsg, GREETING_KEYWORDS)) {
+      reply = GREETING_REPLY + "\n" + WELCOME_MESSAGE;
     } else {
-      reply = 'لسه في انتظار تأكيدك 🙏 اكتب "تأكيد" عشان نسجل الطلب.';
+      reply = WELCOME_MESSAGE;
     }
   }
-  // 5) أول رسالة من العميل
-  else if (!currentState) {
-    userState[from] = "awaiting_order";
-    reply = WELCOME_MESSAGE;
-  }
-  // 6) استلام الطلب وحساب السعر
-  else {
-    const { items, total, address } = parseOrder(incomingMsg);
-
-    if (items.length === 0) {
-      reply = NOT_UNDERSTOOD_MESSAGE;
+  // 5) في مرحلة بناء الطلب
+  else if (currentState === "ordering") {
+    if (containsAny(incomingMsg, CONFIRM_KEYWORDS)) {
+      const order = pendingOrders[from];
+      if (!order || order.items.length === 0) {
+        reply = "لسه معندناش طلب مسجل 🙏\n\n" + MENU_MESSAGE;
+      } else {
+        userState[from] = "awaiting_address";
+        reply = ASK_ADDRESS_MESSAGE;
+      }
     } else {
-      pendingOrders[from] = { items, total, address, timestamp: Date.now() };
-      userState[from] = "awaiting_confirmation";
-      reply = buildOrderSummary(items, total, address);
+      const newItems = parseOrderItems(incomingMsg);
+      if (newItems.length === 0) {
+        reply = "معلش، مش قادر أفهم طلبك 🙏\n\n" + MENU_MESSAGE;
+      } else {
+        const order = pendingOrders[from] || { items: [] };
+        order.items = mergeItems(order.items, newItems);
+        pendingOrders[from] = order;
+
+        const total = calcTotal(order.items);
+        reply =
+          buildItemsSummary(order.items) +
+          `\n\n💰 الإجمالي: ${total} ج.م\n\n` +
+          'تحب تضيف حاجة تانية ولا نأكد الطلب على كده؟ (اكتب "تأكيد" للتأكيد)';
+      }
+    }
+  }
+  // 6) في انتظار العنوان
+  else if (currentState === "awaiting_address") {
+    const order = pendingOrders[from];
+    const address = incomingMsg;
+    try {
+      await saveOrder(from, buildOrderLineForSheet(order.items, address));
+      reply = FINAL_MESSAGE;
+      userState[from] = "done";
+      delete pendingOrders[from];
+    } catch (err) {
+      console.error(err);
+      reply = "حصل خطأ في تسجيل الأوردر، من فضلك حاول تاني بعد شوية.";
+    }
+  }
+  // 7) بعد انتهاء الطلب - يبدأ طلب جديد
+  else if (currentState === "done") {
+    userState[from] = "ordering";
+    pendingOrders[from] = { items: [] };
+    if (containsAny(incomingMsg, GREETING_KEYWORDS)) {
+      reply = GREETING_REPLY + "\n" + WELCOME_MESSAGE;
+    } else {
+      const newItems = parseOrderItems(incomingMsg);
+      if (newItems.length === 0) {
+        reply = WELCOME_MESSAGE;
+        pendingOrders[from] = { items: [] };
+      } else {
+        pendingOrders[from] = { items: newItems };
+        const total = calcTotal(newItems);
+        reply =
+          buildItemsSummary(newItems) +
+          `\n\n💰 الإجمالي: ${total} ج.م\n\n` +
+          'تحب تضيف حاجة تانية ولا نأكد الطلب على كده؟ (اكتب "تأكيد" للتأكيد)';
+      }
     }
   }
 
