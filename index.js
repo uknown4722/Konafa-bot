@@ -57,13 +57,3 @@ app.get("/", (req, res) => res.send("Konafa Bot is running ✅"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-بعد اللصق، دوس Commit changes تحت. Render هيعمل Deploy تلقائي من جديد. قولي لما يخلص ✅
-        .cc-install-nudge { container-type: inline-size; }
-        @keyframes ccInstallNudgeIn {
-          from { opacity: 0; transform: translateY(8px); }
-          to   { opacity: 1; transform: translateY(0); }
-        }
-        @container (max-width: 450px) {
-          .cc-install-nudge-icon { display: none; }
-        }
-      Claude works directly with your codebaseLet Claude edit files, run commands, and ship changes from the desktop app, your terminal, or your IDE.Install
